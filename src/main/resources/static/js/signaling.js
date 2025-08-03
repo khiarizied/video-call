@@ -5,6 +5,7 @@ class SignalingManager {
         this.userId = null;
         this.username = 'Guest';
         this.currentCall = null;
+        this.incomingCall = null;
         this.initializeUI();
         this.connect();
     }
@@ -76,6 +77,172 @@ class SignalingManager {
             document.getElementById('status').textContent = 'Connection error. Please refresh.';
         });
     }
+    
+    createIncomingCallUI() {
+        // Create incoming call modal
+        const modal = document.createElement('div');
+        modal.id = 'incomingCallModal';
+        modal.style.cssText = `
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        `;
+        
+        const modalContent = document.createElement('div');
+        modalContent.style.cssText = `
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            max-width: 400px;
+            width: 90%;
+        `;
+        
+        modalContent.innerHTML = `
+            <h2 style="margin-top: 0; color: #333;">📞 Incoming Call</h2>
+            <p id="callerName" style="font-size: 18px; margin: 20px 0; color: #666; font-weight: bold;"></p>
+            <div style="display: flex; gap: 15px; justify-content: center; margin-top: 30px;">
+                <button id="acceptCallBtn" style="
+                    background: #28a745;
+                    color: white;
+                    border: none;
+                    padding: 12px 24px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    min-width: 100px;
+                    transition: background-color 0.3s;
+                " onmouseover="this.style.backgroundColor='#218838'" 
+                   onmouseout="this.style.backgroundColor='#28a745'">✅ Accept</button>
+                <button id="rejectCallBtn" style="
+                    background: #dc3545;
+                    color: white;
+                    border: none;
+                    padding: 12px 24px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    min-width: 100px;
+                    transition: background-color 0.3s;
+                " onmouseover="this.style.backgroundColor='#c82333'" 
+                   onmouseout="this.style.backgroundColor='#dc3545'">❌ Reject</button>
+            </div>
+            <p style="font-size: 12px; color: #999; margin-top: 15px;">Call will auto-reject in 30 seconds</p>
+        `;
+        
+        modal.appendChild(modalContent);
+        document.body.appendChild(modal);
+        
+        // Add event listeners
+        document.getElementById('acceptCallBtn').addEventListener('click', () => this.acceptIncomingCall());
+        document.getElementById('rejectCallBtn').addEventListener('click', () => this.rejectIncomingCall());
+    }
+    
+    showIncomingCallUI(callerName) {
+        const modal = document.getElementById('incomingCallModal');
+        const callerNameElement = document.getElementById('callerName');
+        
+        callerNameElement.textContent = `${callerName} is calling...`;
+        modal.style.display = 'flex';
+        
+        // Auto-reject after 30 seconds
+        setTimeout(() => {
+            if (modal.style.display === 'flex') {
+                this.rejectIncomingCall();
+            }
+        }, 30000);
+    }
+    
+    hideIncomingCallUI() {
+        const modal = document.getElementById('incomingCallModal');
+        modal.style.display = 'none';
+    }
+    
+    async acceptIncomingCall() {
+        if (!this.incomingCall) {
+            console.error('No incoming call to accept');
+            return;
+        }
+        
+        this.hideIncomingCallUI();
+        
+        try {
+            // Start local stream first if not already started
+            if (!webRTC.localStream) {
+                const streamStarted = await webRTC.startLocalStream();
+                if (!streamStarted) {
+                    console.error('Failed to start local stream for incoming call');
+                    this.sendPrivateMessage({
+                        type: 'call-rejected'
+                    }, this.incomingCall.from);
+                    this.incomingCall = null;
+                    return;
+                }
+            }
+            
+            // Send call accepted message
+            this.sendPrivateMessage({
+                type: 'call-accepted'
+            }, this.incomingCall.from);
+            
+            // Process the offer
+            console.log('Processing offer:', this.incomingCall.offer);
+            const answer = await webRTC.handleOffer(this.incomingCall.offer);
+            console.log('Created answer:', answer);
+            
+            if (answer) {
+                // Send the answer
+                this.sendPrivateMessage({
+                    type: 'answer',
+                    data: JSON.stringify(answer)
+                }, this.incomingCall.from);
+                
+                // Update call state
+                this.currentCall = this.incomingCall.from;
+                document.getElementById('status').textContent = `In call with ${this.incomingCall.fromUsername}`;
+                this.updateCallButtons(true);
+                
+                console.log('Call accepted successfully');
+            } else {
+                console.error('Failed to create answer');
+                this.sendPrivateMessage({
+                    type: 'call-rejected'
+                }, this.incomingCall.from);
+            }
+        } catch (error) {
+            console.error('Error accepting call:', error);
+            this.sendPrivateMessage({
+                type: 'call-rejected'
+            }, this.incomingCall.from);
+        }
+        
+        this.incomingCall = null;
+    }
+    
+    rejectIncomingCall() {
+        if (!this.incomingCall) {
+            console.error('No incoming call to reject');
+            return;
+        }
+        
+        this.hideIncomingCallUI();
+        
+        // Send rejection message
+        this.sendPrivateMessage({
+            type: 'call-rejected'
+        }, this.incomingCall.from);
+        
+        console.log('Call rejected');
+        this.incomingCall = null;
+    }
 
     sendMessage(message) {
         if (this.stompClient && this.stompClient.connected) {
@@ -86,13 +253,32 @@ class SignalingManager {
     }
 
     sendPrivateMessage(message, toUserId) {
+        console.log('=== SEND PRIVATE MESSAGE DEBUG ===');
+        console.log('Sending private message:', message);
+        console.log('To user:', toUserId);
+        console.log('From user:', this.userId);
+        console.log('WebSocket connected:', this.stompClient ? this.stompClient.connected : false);
+        
         if (this.stompClient && this.stompClient.connected) {
             message.from = this.userId;
             message.fromUsername = this.username;
             message.to = toUserId;
-            console.log('Sending private message:', message);
-            this.stompClient.send("/app/private", {}, JSON.stringify(message));
+            
+            const messageToSend = JSON.stringify(message);
+            console.log('Final message being sent:', messageToSend);
+            
+            try {
+                this.stompClient.send("/app/private", {}, messageToSend);
+                console.log('Message sent successfully via WebSocket');
+            } catch (error) {
+                console.error('Error sending WebSocket message:', error);
+            }
+        } else {
+            console.error('Cannot send private message - WebSocket not connected');
+            console.log('StompClient exists:', !!this.stompClient);
+            console.log('StompClient connected:', this.stompClient ? this.stompClient.connected : 'N/A');
         }
+        console.log('=================================');
     }
 
     requestUsersList() {
@@ -136,44 +322,46 @@ class SignalingManager {
     }
 
     async handleOffer(message) {
+        console.log('Handling incoming offer from:', message.from);
         const callerName = message.fromUsername || message.from;
-        if (confirm(`Incoming call from ${callerName}. Accept?`)) {
-            this.sendPrivateMessage({
-                type: 'call-accepted'
-            }, message.from);
-            
-            const offer = JSON.parse(message.data);
-            const answer = await webRTC.handleOffer(offer);
-            
-            if (answer) {
-                this.sendPrivateMessage({
-                    type: 'answer',
-                    data: JSON.stringify(answer)
-                }, message.from);
-                
-                this.currentCall = message.from;
-                document.getElementById('status').textContent = `In call with ${callerName}`;
-                this.updateCallButtons(true);
-            }
-        } else {
-            this.sendPrivateMessage({
-                type: 'call-rejected'
-            }, message.from);
-        }
+        
+        // Store the incoming call information
+        this.incomingCall = {
+            from: message.from,
+            fromUsername: callerName,
+            offer: JSON.parse(message.data)
+        };
+        
+        // Show incoming call UI
+        this.showIncomingCallUI(callerName);
     }
 
     async handleAnswer(message) {
-        const answer = JSON.parse(message.data);
-        await webRTC.handleAnswer(answer);
-        this.currentCall = message.from;
-        const calleeName = message.fromUsername || message.from;
-        document.getElementById('status').textContent = `In call with ${calleeName}`;
-        this.updateCallButtons(true);
+        console.log('Handling answer from:', message.from);
+        try {
+            const answer = JSON.parse(message.data);
+            console.log('Processing answer:', answer);
+            
+            await webRTC.handleAnswer(answer);
+            this.currentCall = message.from;
+            const calleeName = message.fromUsername || message.from;
+            document.getElementById('status').textContent = `Connected to ${calleeName}`;
+            this.updateCallButtons(true);
+        } catch (error) {
+            console.error('Error handling answer:', error);
+            document.getElementById('status').textContent = 'Call connection failed';
+        }
     }
 
     async handleIceCandidate(message) {
-        const candidate = JSON.parse(message.data);
-        await webRTC.handleIceCandidate(candidate);
+        console.log('Handling ICE candidate from:', message.from);
+        try {
+            const candidate = JSON.parse(message.data);
+            console.log('Processing ICE candidate:', candidate);
+            await webRTC.handleIceCandidate(candidate);
+        } catch (error) {
+            console.error('Error handling ICE candidate:', error);
+        }
     }
 
     handleCallAccepted(message) {
@@ -184,15 +372,26 @@ class SignalingManager {
 
     handleCallRejected(message) {
         const calleeName = message.fromUsername || message.from;
+        console.log('Call rejected by:', calleeName);
         alert(`Call rejected by ${calleeName}`);
         document.getElementById('status').textContent = 'Call rejected';
         this.updateCallButtons(false);
         this.currentCall = null;
+        this.incomingCall = null;
+        
+        // Clean up WebRTC connection
+        webRTC.closeConnection();
     }
 
     handleCallEnded(message) {
+        console.log('Call ended by remote user:', message.from);
+        
+        // Hide incoming call UI if it's showing
+        this.hideIncomingCallUI();
+        
         webRTC.closeConnection();
         this.currentCall = null;
+        this.incomingCall = null;
         const userName = message.fromUsername || message.from || 'Remote user';
         document.getElementById('status').textContent = `Call ended by ${userName}`;
         this.updateCallButtons(false);
@@ -220,6 +419,9 @@ class SignalingManager {
             if (e.key === 'Enter') this.sendMessageToUser();
         });
         
+        // Create incoming call UI
+        this.createIncomingCallUI();
+        
         // Add debug button (temporary)
         const debugBtn = document.createElement('button');
         debugBtn.textContent = 'Debug Info';
@@ -229,11 +431,25 @@ class SignalingManager {
             console.log('Username:', this.username);
             console.log('Connected:', this.stompClient ? this.stompClient.connected : false);
             console.log('Current call:', this.currentCall);
+            console.log('Incoming call:', this.incomingCall);
             console.log('Local stream:', webRTC ? !!webRTC.localStream : false);
+            console.log('WebRTC object:', webRTC);
+            if (webRTC && webRTC.localStream) {
+                console.log('Local stream tracks:', webRTC.localStream.getTracks());
+            }
             console.log('==================');
-            alert(`UserId: ${this.userId}\nUsername: ${this.username}\nConnected: ${this.stompClient ? this.stompClient.connected : false}`);
+            alert(`UserId: ${this.userId}\nUsername: ${this.username}\nConnected: ${this.stompClient ? this.stompClient.connected : false}\nLocal Stream: ${webRTC ? !!webRTC.localStream : false}`);
         };
         document.querySelector('.controls').appendChild(debugBtn);
+        
+        // Add test call button
+        const testBtn = document.createElement('button');
+        testBtn.textContent = 'Test Call Function';
+        testBtn.onclick = () => {
+            console.log('Testing call function...');
+            this.callUser('test-user-123', 'Test User');
+        };
+        document.querySelector('.controls').appendChild(testBtn);
         
         // Auto-refresh users list every 10 seconds
         setInterval(() => {
@@ -281,6 +497,9 @@ class SignalingManager {
     }
 
     endCall() {
+        // Hide incoming call UI if it's showing
+        this.hideIncomingCallUI();
+        
         webRTC.stopLocalStream();
         webRTC.closeConnection();
         
@@ -291,6 +510,13 @@ class SignalingManager {
             this.currentCall = null;
         }
         
+        if (this.incomingCall) {
+            this.sendPrivateMessage({
+                type: 'call-rejected'
+            }, this.incomingCall.from);
+            this.incomingCall = null;
+        }
+        
         document.getElementById('startCallBtn').disabled = false;
         document.getElementById('endCallBtn').disabled = true;
         document.getElementById('status').textContent = 'Call ended';
@@ -299,8 +525,14 @@ class SignalingManager {
     }
 
     callUser(userId, username) {
-        console.log('Attempting to call user:', userId, 'Current userId:', this.userId);
-        alert(this.userId);
+        console.log('=== CALL USER DEBUG ===');
+        console.log('Attempting to call user:', userId, 'username:', username);
+        console.log('Current userId:', this.userId);
+        console.log('WebSocket connected:', this.stompClient ? this.stompClient.connected : false);
+        console.log('Current call:', this.currentCall);
+        console.log('Local stream available:', webRTC ? !!webRTC.localStream : false);
+        console.log('=====================');
+        
         if (!this.userId) {
             console.error('UserId not set!');
             alert('Connection not established yet. Please wait a moment and try again.');
@@ -314,31 +546,63 @@ class SignalingManager {
         }
         
         if (this.currentCall) {
+            console.log('Already in call with:', this.currentCall);
             alert('You are already in a call');
             return;
         }
 
-        if (!webRTC.localStream) {
-            alert('Please start your camera first');
+        if (!webRTC || !webRTC.localStream) {
+            console.error('Local stream not available');
+            alert('Please start your camera first by clicking "Start Camera"');
             return;
         }
 
+        console.log('All checks passed, initiating call...');
         console.log('Initiating call from', this.userId, 'to', userId);
-        webRTC.createPeerConnection();
-        webRTC.createOffer().then(offer => {
-            if (offer) {
-                this.sendPrivateMessage({
-                    type: 'offer',
-                    data: JSON.stringify(offer)
-                }, userId);
-                
-                this.currentCall = userId;
-                document.getElementById('status').textContent = `Calling ${username}...`;
-            }
-        }).catch(error => {
-            console.error('Error creating offer:', error);
-            alert('Failed to create call offer. Please try again.');
-        });
+        
+        // Set current call immediately to prevent multiple calls
+        this.currentCall = userId;
+        document.getElementById('status').textContent = `Calling ${username}...`;
+        this.updateCallButtons(true);
+        
+        try {
+            console.log('Creating peer connection...');
+            webRTC.createPeerConnection();
+            
+            console.log('Creating offer...');
+            webRTC.createOffer().then(offer => {
+                if (offer) {
+                    console.log('Offer created successfully, sending to', userId);
+                    console.log('Offer details:', offer);
+                    
+                    this.sendPrivateMessage({
+                        type: 'offer',
+                        data: JSON.stringify(offer)
+                    }, userId);
+                    
+                    console.log('Offer sent successfully');
+                    document.getElementById('status').textContent = `Calling ${username}... (offer sent)`;
+                } else {
+                    console.error('Failed to create offer - offer is null');
+                    this.currentCall = null;
+                    this.updateCallButtons(false);
+                    document.getElementById('status').textContent = 'Failed to create call offer';
+                    alert('Failed to create call offer. Please try again.');
+                }
+            }).catch(error => {
+                console.error('Error in createOffer promise:', error);
+                this.currentCall = null;
+                this.updateCallButtons(false);
+                document.getElementById('status').textContent = 'Failed to create call offer';
+                alert('Failed to create call offer: ' + error.message);
+            });
+        } catch (error) {
+            console.error('Error in callUser:', error);
+            this.currentCall = null;
+            this.updateCallButtons(false);
+            document.getElementById('status').textContent = 'Failed to initiate call';
+            alert('Failed to initiate call: ' + error.message);
+        }
     }
 
     sendMessageToUser() {
@@ -372,6 +636,12 @@ class SignalingManager {
     updateCallButtons(inCall) {
         document.getElementById('startCallBtn').disabled = inCall;
         document.getElementById('endCallBtn').disabled = !inCall;
+        
+        // Update user list call buttons
+        const callButtons = document.querySelectorAll('.user-actions button');
+        callButtons.forEach(button => {
+            button.disabled = inCall || !webRTC.localStream;
+        });
     }
 
     updateUsersList(users) {
@@ -432,20 +702,36 @@ class SignalingManager {
             
             const statusClass = user.inCall ? 'in-call' : 'online';
             const statusText = user.inCall ? 'In Call' : 'Online';
+            const isCurrentlyInCall = this.currentCall !== null;
+            const callButtonDisabled = isCurrentlyInCall || !webRTC || !webRTC.localStream;
             
-            userDiv.innerHTML = `
-                <div class="user-info-text">
-                    <div><strong>${user.username || user.userId}</strong></div>
-                    <div class="user-status ${statusClass}">${statusText}</div>
-                </div>
-                <div class="user-actions">
-                    <button onclick="window.signaling.callUser('${user.userId}', '${user.username || user.userId}')" 
-                            ${this.currentCall || !webRTC || !webRTC.localStream ? 'disabled' : ''}>
-                        Call
-                    </button>
-                </div>
+            const userInfoDiv = document.createElement('div');
+            userInfoDiv.className = 'user-info-text';
+            userInfoDiv.innerHTML = `
+                <div><strong>${user.username || user.userId}</strong></div>
+                <div class="user-status ${statusClass}">${statusText}</div>
             `;
             
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'user-actions';
+            
+            const callButton = document.createElement('button');
+            callButton.textContent = isCurrentlyInCall ? '📞 Busy' : '📞 Call';
+            callButton.disabled = callButtonDisabled;
+            if (callButtonDisabled) {
+                callButton.style.opacity = '0.5';
+                callButton.style.cursor = 'not-allowed';
+            }
+            
+            // Add click event listener directly
+            callButton.addEventListener('click', () => {
+                console.log('Call button clicked for user:', user.userId, user.username);
+                this.callUser(user.userId, user.username || user.userId);
+            });
+            
+            actionsDiv.appendChild(callButton);
+            userDiv.appendChild(userInfoDiv);
+            userDiv.appendChild(actionsDiv);
             usersListDiv.appendChild(userDiv);
         });
     }
