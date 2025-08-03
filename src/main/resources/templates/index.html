@@ -1,0 +1,65 @@
+<!-- src/main/resources/static/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call App</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.2/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Video Call Application</h1>
+        
+        <div class="user-info">
+            <div class="username-input">
+                <label for="username">Your Name:</label>
+                <input type="text" id="username" placeholder="Enter your name">
+                <button id="setUsernameBtn">Set Name</button>
+            </div>
+            <div class="current-user">
+                Current User: <span id="currentUserId">Not set</span>
+            </div>
+        </div>
+
+        <div class="video-container">
+            <div class="video-wrapper">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <div class="video-label">You</div>
+            </div>
+            <div class="video-wrapper">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <div class="video-label">Remote</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="startCallBtn">Start Camera</button>
+            <button id="endCallBtn" disabled>End Call</button>
+        </div>
+
+        <div class="users-section">
+            <h3>Connected Users</h3>
+            <div class="users-list-container">
+                <div id="usersList" class="users-list"></div>
+                <button id="refreshUsersBtn">Refresh Users</button>
+            </div>
+        </div>
+
+        <div class="status" id="status">Ready to start call</div>
+        
+        <div class="chat-container">
+            <div id="messages"></div>
+            <div class="chat-input">
+                <input type="text" id="messageInput" placeholder="Type a message...">
+                <button id="sendBtn">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/webrtc.js"></script>
+    <script src="/js/signaling.js"></script>
+</body>
+</html>
