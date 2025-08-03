@@ -13,35 +13,64 @@ class SignalingManager {
         const socket = new SockJS('/websocket');
         this.stompClient = Stomp.over(socket);
         
+        // Generate userId if not exists
+        if (!this.userId) {
+            this.userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
         // Set connection headers
         const headers = {
-            'userId': this.userId || 'user_' + Date.now(),
-            'username': this.username
+            'username': this.username,
+            'userId': this.userId
         };
+        
+        console.log('Connecting with userId:', this.userId, 'username:', this.username);
         
         this.stompClient.connect(headers, (frame) => {
             console.log('Connected: ' + frame);
+            console.log('Current userId after connection:', this.userId);
+            
+            // Update UI immediately
+            document.getElementById('currentUserId').textContent = `${this.username} (${this.userId})`;
             
             // Subscribe to private messages
-            this.stompClient.subscribe('/app/queue/private', (message) => {
+            this.stompClient.subscribe('/user/queue/private', (message) => {
+                console.log('Received private message:', message.body);
                 this.handleSignalingMessage(JSON.parse(message.body));
             });
             
             // Subscribe to user list updates
-            this.stompClient.subscribe('/app/topic/users', (message) => {
+            this.stompClient.subscribe('/topic/users', (message) => {
                 try {
                     const users = JSON.parse(message.body);
                     console.log('Received users list:', users);
                     this.updateUsersList(users);
                 } catch (error) {
                     console.error('Error parsing users list:', error);
+                    console.log('Raw message:', message.body);
                 }
             });
             
-            // Request initial user list
-            setTimeout(() => this.requestUsersList(), 1000);
+            // Subscribe to user info updates
+            this.stompClient.subscribe('/user/queue/userinfo', (message) => {
+                try {
+                    const userInfo = JSON.parse(message.body);
+                    console.log('Received user info:', userInfo);
+                    this.userId = userInfo.userId;
+                    this.username = userInfo.username;
+                    document.getElementById('currentUserId').textContent = `${this.username} (${this.userId})`;
+                } catch (error) {
+                    console.error('Error parsing user info:', error);
+                }
+            });
             
-            document.getElementById('status').textContent = 'Connected';
+            // Request initial user list and user info after a short delay
+            setTimeout(() => {
+                this.requestUsersList();
+                this.stompClient.send("/app/user/info", {}, JSON.stringify({}));
+            }, 1000);
+            
+            document.getElementById('status').textContent = 'Connected - Loading user information...';
         }, (error) => {
             console.error('WebSocket connection error:', error);
             document.getElementById('status').textContent = 'Connection error. Please refresh.';
@@ -61,6 +90,7 @@ class SignalingManager {
             message.from = this.userId;
             message.fromUsername = this.username;
             message.to = toUserId;
+            console.log('Sending private message:', message);
             this.stompClient.send("/app/private", {}, JSON.stringify(message));
         }
     }
@@ -169,6 +199,18 @@ class SignalingManager {
     }
 
     initializeUI() {
+        // Load saved username
+        const savedUsername = localStorage.getItem('videoCallUsername');
+        if (savedUsername) {
+            document.getElementById('username').value = savedUsername;
+            this.username = savedUsername;
+        }
+        
+        // Generate initial userId
+        if (!this.userId) {
+            this.userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
         document.getElementById('setUsernameBtn').addEventListener('click', () => this.setUsername());
         document.getElementById('startCallBtn').addEventListener('click', () => this.startCall());
         document.getElementById('endCallBtn').addEventListener('click', () => this.endCall());
@@ -177,6 +219,21 @@ class SignalingManager {
         document.getElementById('messageInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.sendMessageToUser();
         });
+        
+        // Add debug button (temporary)
+        const debugBtn = document.createElement('button');
+        debugBtn.textContent = 'Debug Info';
+        debugBtn.onclick = () => {
+            console.log('=== DEBUG INFO ===');
+            console.log('UserId:', this.userId);
+            console.log('Username:', this.username);
+            console.log('Connected:', this.stompClient ? this.stompClient.connected : false);
+            console.log('Current call:', this.currentCall);
+            console.log('Local stream:', webRTC ? !!webRTC.localStream : false);
+            console.log('==================');
+            alert(`UserId: ${this.userId}\nUsername: ${this.username}\nConnected: ${this.stompClient ? this.stompClient.connected : false}`);
+        };
+        document.querySelector('.controls').appendChild(debugBtn);
         
         // Auto-refresh users list every 10 seconds
         setInterval(() => {
@@ -198,25 +255,22 @@ class SignalingManager {
         this.username = newUsername;
         localStorage.setItem('videoCallUsername', newUsername);
         
+        // Generate new userId if not exists
         if (!this.userId) {
             this.userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         }
         
         document.getElementById('currentUserId').textContent = `${this.username} (${this.userId})`;
-        document.getElementById('status').textContent = `Username set to: ${this.username}`;
+        document.getElementById('status').textContent = `Setting username to: ${this.username}`;
         
         // Reconnect with new username
-        if (this.stompClient) {
+        if (this.stompClient && this.stompClient.connected) {
             this.stompClient.disconnect();
         }
         setTimeout(() => this.connect(), 1000);
     }
 
-    async startCall() {
-        if (!this.userId) {
-            this.userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-        }
-        
+    async startCall() {        
         const success = await webRTC.startLocalStream();
         if (success) {
             document.getElementById('startCallBtn').disabled = true;
@@ -245,8 +299,17 @@ class SignalingManager {
     }
 
     callUser(userId, username) {
+        console.log('Attempting to call user:', userId, 'Current userId:', this.userId);
+        alert(this.userId);
         if (!this.userId) {
-            alert('Please set your username first');
+            console.error('UserId not set!');
+            alert('Connection not established yet. Please wait a moment and try again.');
+            return;
+        }
+        
+        if (!this.stompClient || !this.stompClient.connected) {
+            console.error('WebSocket not connected!');
+            alert('WebSocket connection not established. Please refresh the page.');
             return;
         }
         
@@ -255,6 +318,12 @@ class SignalingManager {
             return;
         }
 
+        if (!webRTC.localStream) {
+            alert('Please start your camera first');
+            return;
+        }
+
+        console.log('Initiating call from', this.userId, 'to', userId);
         webRTC.createPeerConnection();
         webRTC.createOffer().then(offer => {
             if (offer) {
@@ -266,6 +335,9 @@ class SignalingManager {
                 this.currentCall = userId;
                 document.getElementById('status').textContent = `Calling ${username}...`;
             }
+        }).catch(error => {
+            console.error('Error creating offer:', error);
+            alert('Failed to create call offer. Please try again.');
         });
     }
 
@@ -304,17 +376,55 @@ class SignalingManager {
 
     updateUsersList(users) {
         const usersListDiv = document.getElementById('usersList');
+        console.log('Updating users list with:', users);
+        console.log('Current userId:', this.userId);
+        
         usersListDiv.innerHTML = '';
+        
+        if (!users || users.length === 0) {
+            usersListDiv.innerHTML = '<p class="no-users">No users online</p>';
+            document.getElementById('status').textContent = 'Connected - No other users online';
+            return;
+        }
         
         // Filter out current user
         const filteredUsers = users.filter(user => user.userId !== this.userId);
         
-        console.log('Displaying users:', filteredUsers);
+        console.log('Filtered users (excluding self):', filteredUsers);
         
         if (filteredUsers.length === 0) {
             usersListDiv.innerHTML = '<p class="no-users">No other users online</p>';
+            document.getElementById('status').textContent = 'Connected - No other users online';
+            
+            // Update current user display
+            if (users.length > 0) {
+                const currentUser = users.find(user => user.userId === this.userId);
+                if (currentUser) {
+                    document.getElementById('currentUserId').textContent = `${currentUser.username} (${currentUser.userId})`;
+                    this.userId = currentUser.userId;
+                    this.username = currentUser.username;
+                } else if (users.length === 1) {
+                    // If there's only one user and it's not matching our userId, it might be us
+                    const user = users[0];
+                    document.getElementById('currentUserId').textContent = `${user.username} (${user.userId})`;
+                    this.userId = user.userId;
+                    this.username = user.username;
+                }
+            }
             return;
         }
+        
+        // Update current user display if not set
+        if (!this.userId) {
+            const possibleCurrentUser = users.find(user => !filteredUsers.includes(user));
+            if (possibleCurrentUser) {
+                this.userId = possibleCurrentUser.userId;
+                this.username = possibleCurrentUser.username;
+                document.getElementById('currentUserId').textContent = `${this.username} (${this.userId})`;
+            }
+        }
+        
+        document.getElementById('status').textContent = `Connected - ${filteredUsers.length} other user(s) online`;
         
         filteredUsers.forEach(user => {
             const userDiv = document.createElement('div');
